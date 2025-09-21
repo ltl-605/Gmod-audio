@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <title>Pitch Changer Pro</title>
+
+  <style>
+
+    body {
+
+      font-family: sans-serif;
+
+      background: #111;
+
+      color: #0f0;
+
+      text-align: center;
+
+      padding: 20px;
+
+    }
+
+    input[type="range"] {
+
+      width: 60%;
+
+    }
+
+    .controls, .pitch-settings {
+
+      margin-top: 20px;
+
+    }
+
+    button {
+
+      padding: 10px 20px;
+
+      margin: 5px;
+
+      font-size: 16px;
+
+    }
+
+    canvas {
+
+      margin-top: 30px;
+
+      background: #222;
+
+      width: 90%;
+
+      height: 100px;
+
+      border: 1px solid #0f0;
+
+      cursor: pointer;
+
+    }
+
+    label, input {
+
+      font-size: 16px;
+
+    }
+
+  </style>
+
+</head>
+
+<body>
+
+  <h1>🎧 Pitch Changer Pro</h1>
+
+  <input type="file" accept="audio/*" id="audioFile"><br><br>
+
+  <div class="pitch-settings">
+
+    <label for="pitchRange">Pitch (semitones): <span id="pitchValue">0.0</span></label>
+
+    <input type="range" id="pitchRange" min="-12" max="12" step="0.1" value="0">
+
+    <button onclick="resetPitch()">♻️</button><br>
+
+    <label><input type="checkbox" id="realtimePitch"> Real-Time Pitch</label><br><br>
+
+    <label for="rangeLimit">Max Pitch Range: </label>
+
+    <input type="number" id="rangeLimit" value="12" min="1" max="48">
+
+    <button onclick="updatePitchRange()">Update Range</button>
+
+  </div>
+
+  <div class="controls">
+
+    <button onclick="playAudio()">▶ Play</button>
+
+    <button onclick="pauseAudio()">⏸ Pause</button>
+
+    <button onclick="resetAudio()">🔁 Reset</button>
+
+    <button onclick="downloadShifted()">⬇ Download Audio</button>
+
+  </div>
+
+  <canvas id="visualizer" width="800" height="100"></canvas>
+
+  <script>
+
+    let audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+    let sourceNode, analyser, bufferSource, audioBuffer, dataArray, canvas, canvasCtx;
+
+    let currentPitch = 0.0, isPlaying = false, realtimeEnabled = false;
+
+    let visualStartTime = 0, seekTime = 0;
+
+    const pitchSlider = document.getElementById("pitchRange");
+
+    const pitchDisplay = document.getElementById("pitchValue");
+
+    const realtimeCheckbox = document.getElementById("realtimePitch");
+
+    const canvasEl = document.getElementById("visualizer");
+
+    canvasCtx = canvasEl.getContext("2d");
+
+    document.getElementById("audioFile").addEventListener("change", handleFile);
+
+    pitchSlider.addEventListener("input", () => {
+
+      currentPitch = parseFloat(pitchSlider.value);
+
+      pitchDisplay.textContent = currentPitch.toFixed(1);
+
+      if (isPlaying && realtimeCheckbox.checked) {
+
+        if (sourceNode) sourceNode.playbackRate.value = Math.pow(2, currentPitch / 12);
+
+      }
+
+    });
+
+    realtimeCheckbox.addEventListener("change", () => {
+
+      realtimeEnabled = realtimeCheckbox.checked;
+
+    });
+
+    canvasEl.addEventListener("click", (e) => {
+
+      if (!audioBuffer) return;
+
+      const rect = canvasEl.getBoundingClientRect();
+
+      const x = e.clientX - rect.left;
+
+      const ratio = x / canvasEl.width;
+
+      const newTime = audioBuffer.duration * ratio;
+
+      if (isPlaying) {
+
+        pauseAudio();
+
+        seekTime = newTime;
+
+        playAudio();
+
+      } else {
+
+        seekTime = newTime;
+
+      }
+
+    });
+
+    function resetPitch() {
+
+      currentPitch = 0;
+
+      pitchSlider.value = 0;
+
+      pitchDisplay.textContent = "0.0";
+
+    }
+
+    function updatePitchRange() {
+
+      let max = parseInt(document.getElementById("rangeLimit").value);
+
+      pitchSlider.min = -max;
+
+      pitchSlider.max = max;
+
+    }
+
+    function handleFile(event) {
+
+      let file = event.target.files[0];
+
+      if (!file) return;
+
+      let reader = new FileReader();
+
+      reader.onload = function (e) {
+
+        audioContext.decodeAudioData(e.target.result, function (buffer) {
+
+          audioBuffer = buffer;
+
+          resetAudio();
+
+          drawVisualizer(); // initialize visualization
+
+        });
+
+      };
+
+      reader.readAsArrayBuffer(file);
+
+    }
+
+    function playAudio() {
+
+      if (!audioBuffer) return;
+
+      if (isPlaying) return;
+
+      sourceNode = audioContext.createBufferSource();
+
+      sourceNode.buffer = audioBuffer;
+
+      const rate = Math.pow(2, currentPitch / 12);
+
+      sourceNode.playbackRate.value = rate;
+
+      analyser = audioContext.createAnalyser();
+
+      analyser.fftSize = 2048;
+
+      dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      sourceNode.connect(analyser);
+
+      analyser.connect(audioContext.destination);
+
+      sourceNode.start(0, seekTime);
+
+      visualStartTime = audioContext.currentTime - seekTime;
+
+      isPlaying = true;
+
+      sourceNode.onended = () => isPlaying = false;
+
+      drawVisualizer();
+
+    }
+
+    function pauseAudio() {
+
+      if (sourceNode && isPlaying) {
+
+        sourceNode.stop();
+
+        seekTime = audioContext.currentTime - visualStartTime;
+
+        isPlaying = false;
+
+      }
+
+    }
+
+    function resetAudio() {
+
+      pauseAudio();
+
+      seekTime = 0;
+
+    }
+
+    function drawVisualizer() {
+
+      if (!analyser) return;
+
+      requestAnimationFrame(drawVisualizer);
+
+      analyser.getByteTimeDomainData(dataArray);
+
+      canvasCtx.fillStyle = "#111";
+
+      canvasCtx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+
+      canvasCtx.lineWidth = 2;
+
+      canvasCtx.strokeStyle = "#0f0";
+
+      canvasCtx.beginPath();
+
+      let sliceWidth = canvasEl.width * 1.0 / dataArray.length;
+
+      let x = 0;
+
+      for (let i = 0; i < dataArray.length; i++) {
+
+        let v = dataArray[i] / 128.0;
+
+        let y = v * canvasEl.height / 2;
+
+        if (i === 0) canvasCtx.moveTo(x, y);
+
+        else canvasCtx.lineTo(x, y);
+
+        x += sliceWidth;
+
+      }
+
+      canvasCtx.lineTo(canvasEl.width, canvasEl.height / 2);
+
+      canvasCtx.stroke();
+
+    }
+
+    function downloadShifted() {
+
+      if (!audioBuffer) return;
+
+      let rate = Math.pow(2, currentPitch / 12);
+
+      let duration = audioBuffer.duration / rate;
+
+      let offlineCtx = new OfflineAudioContext(
+
+        audioBuffer.numberOfChannels,
+
+        Math.ceil(audioBuffer.sampleRate * duration),
+
+        audioBuffer.sampleRate
+
+      );
+
+      let source = offlineCtx.createBufferSource();
+
+      source.buffer = audioBuffer;
+
+      source.playbackRate.value = rate;
+
+      source.connect(offlineCtx.destination);
+
+      source.start();
+
+      offlineCtx.startRendering().then(rendered => {
+
+        let wavBlob = bufferToWavBlob(rendered);
+
+        let a = document.createElement("a");
+
+        a.href = URL.createObjectURL(wavBlob);
+
+        a.download = "pitch-shifted.wav";
+
+        a.click();
+
+        URL.revokeObjectURL(a.href);
+
+      });
+
+    }
+
+    function bufferToWavBlob(buffer) {
+
+      let numChannels = buffer.numberOfChannels;
+
+      let sampleRate = buffer.sampleRate;
+
+      let length = buffer.length * numChannels * 2;
+
+      let wavBuffer = new ArrayBuffer(44 + length);
+
+      let view = new DataView(wavBuffer);
+
+      function writeString(offset, str) {
+
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+
+      }
+
+      writeString(0, 'RIFF');
+
+      view.setUint32(4, 36 + length, true);
+
+      writeString(8, 'WAVE');
+
+      writeString(12, 'fmt ');
+
+      view.setUint32(16, 16, true);
+
+      view.setUint16(20, 1, true);
+
+      view.setUint16(22, numChannels, true);
+
+      view.setUint32(24, sampleRate, true);
+
+      view.setUint32(28, sampleRate * numChannels * 2, true);
+
+      view.setUint16(32, numChannels * 2, true);
+
+      view.setUint16(34, 16, true);
+
+      writeString(36, 'data');
+
+      view.setUint32(40, length, true);
+
+      let offset = 44;
+
+      for (let i = 0; i < buffer.length; i++) {
+
+        for (let c = 0; c < numChannels; c++) {
+
+          let sample = buffer.getChannelData(c)[i];
+
+          sample = Math.max(-1, Math.min(1, sample));
+
+          view.setInt16(offset, sample * 0x7FFF, true);
+
+          offset += 2;
+
+        }
+
+      }
+
+      return new Blob([view], { type: 'audio/wav' });
+
+    }
+
+  </script>
+
+</body>
+
+</html>
